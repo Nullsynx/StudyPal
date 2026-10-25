@@ -37,6 +37,8 @@ select{background:var(--card);border:1px solid var(--bd);border-radius:10px;padd
 .a pre{background:var(--code);padding:10px;border-radius:10px;overflow-x:auto;font-size:13px}
 .a code{background:var(--code);padding:1px 5px;border-radius:5px;font-size:.92em}
 .a pre code{background:none;padding:0}
+.dgm{background:#fff;border-radius:12px;padding:8px;margin:8px 0;border:1px solid var(--bd)}
+.dgm .sv{display:block;margin:6px 0 0 auto;border:0;background:none;color:#3b5bdb;font-size:13px;cursor:pointer}
 .tools{margin-top:6px}.tools button{background:none;border:0;color:var(--mu);font-size:13px;cursor:pointer;padding:2px 6px}
 .hint{color:var(--mu);text-align:center;margin:auto;padding:20px;font-size:15px}
 .thumbs{display:flex;gap:6px;padding:0 14px;flex-wrap:wrap}
@@ -87,7 +89,7 @@ label.ib input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor
 <script>
 const $=s=>document.querySelector(s);
 const SUBJ=["Auto","Maths","Physics","Chemistry","CS","AI / ML"];
-let subject="Auto",msgs=[],files=[],busy=false,ctrl=null,mode="steps";
+let diagram=false,subject="Auto",msgs=[],files=[],busy=false,ctrl=null,mode="steps";
 const store={steps:{msgs:[],html:""},quick:{msgs:[],html:""}};
 const HINT={steps:"Type, speak, snap a photo, or upload a PDF of any Maths, Physics, Chemistry, CS or AI problem.<br>You get a step-by-step solution matched to your level.",quick:"Quick mode: get just the answer in 4-5 lines.<br>Type, speak, snap a photo, or upload a PDF."};
 function setMode(m){
@@ -100,16 +102,53 @@ function setMode(m){
 $("#t-steps").onclick=()=>setMode("steps");
 $("#t-quick").onclick=()=>setMode("quick");
 SUBJ.forEach(s=>{const b=document.createElement("button");b.className="chip"+(s==subject?" on":"");b.textContent=s;
- b.onclick=()=>{subject=s;document.querySelectorAll(".chip").forEach(c=>c.classList.toggle("on",c==b))};$("#chips").append(b)});
+ b.onclick=()=>{subject=s;document.querySelectorAll(".chip:not(.dg)").forEach(c=>c.classList.toggle("on",c==b))};$("#chips").append(b)});
 
+const dg=document.createElement("button");dg.className="chip dg";dg.textContent="📐 Diagram";
+dg.onclick=()=>{diagram=!diagram;dg.classList.toggle("on",diagram)};$("#chips").prepend(dg);
+function diagHint(){
+ const rules=' Put the SVG in ONE fenced block that starts with ```svg and ends with ```, placed after the written answer. It must be self-contained: use viewBox="0 0 400 300", simple shapes, clear labels (font-size 14), dark strokes (#222) and light fills on a transparent background, arrowheads via <marker>. No scripts, images, links or style tags. Do not mention these rules.';
+ return diagram?"\n\n(Include a clear, correct SVG diagram that illustrates the problem or solution."+rules+")":"\n\n(Only if the student asks for a diagram or drawing, or one is essential, include an SVG diagram."+rules+")";
+}
 function esc(t){return t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
 function inl(t){return esc(t).replace(/`([^`]+)`/g,"<code>$1</code>").replace(/\*\*([^*]+)\*\*/g,"<b>$1</b>")}
+function cleanSvg(src){
+ try{
+  const d=new DOMParser().parseFromString(src,"image/svg+xml");
+  const svg=d.documentElement;
+  if(!svg||svg.nodeName.toLowerCase()!=="svg"||d.querySelector("parsererror"))return null;
+  svg.querySelectorAll("script,foreignObject,iframe,image,a,use,style").forEach(n=>n.remove());
+  [svg,...svg.querySelectorAll("*")].forEach(n=>{[...n.attributes].forEach(a=>{const k=a.name.toLowerCase();if(k.startsWith("on")||/javascript:/i.test(a.value)||k==="href"||k==="xlink:href")n.removeAttribute(a.name)})});
+  svg.setAttribute("xmlns","http://www.w3.org/2000/svg");
+  if(!svg.getAttribute("viewBox")){const w=parseFloat(svg.getAttribute("width"))||400,h=parseFloat(svg.getAttribute("height"))||300;svg.setAttribute("viewBox","0 0 "+w+" "+h)}
+  svg.removeAttribute("width");svg.removeAttribute("height");
+  svg.setAttribute("style","width:100%;height:auto;display:block");
+  return new XMLSerializer().serializeToString(svg);
+ }catch(e){return null}
+}
+function svgBlock(code){
+ const c=cleanSvg(code);
+ if(!c)return "<pre><code>"+esc(code)+"</code></pre>";
+ return '<div class="dgm">'+c+'<button class="sv" onclick="saveSvg(this)">⬇ Save image</button></div>';
+}
+function saveSvg(b){
+ const svg=b.parentNode.querySelector("svg"),vb=svg.viewBox.baseVal;
+ const W=1200,H=Math.round(W*((vb&&vb.width?vb.height/vb.width:0.75)));
+ const s=new XMLSerializer().serializeToString(svg).replace(/ style="[^"]*"/,"").replace("<svg",'<svg width="'+W+'" height="'+H+'"');
+ const img=new Image();
+ img.onload=()=>{const c=document.createElement("canvas");c.width=W;c.height=H;const x=c.getContext("2d");x.fillStyle="#fff";x.fillRect(0,0,W,H);x.drawImage(img,0,0,W,H);
+  c.toBlob(bl=>{const a=document.createElement("a");a.href=URL.createObjectURL(bl);a.download="diagram.png";document.body.append(a);a.click();a.remove()})};
+ img.src="data:image/svg+xml;charset=utf-8,"+encodeURIComponent(s);
+}
 function md(src){
- const L=src.split("\n");let h="",inCode=false,list=null;
+ const L=src.split("\n");let h="",inCode=false,list=null,lang="",buf=[];
  const close=()=>{if(list){h+="</"+list+">";list=null}};
  for(const l of L){
-  if(l.startsWith("```")){close();h+=inCode?"</code></pre>":"<pre><code>";inCode=!inCode;continue}
-  if(inCode){h+=esc(l)+"\n";continue}
+  if(l.startsWith("```")){close();
+   if(!inCode){inCode=true;lang=l.slice(3).trim().toLowerCase();buf=[];if(lang!="svg")h+="<pre><code>"}
+   else{inCode=false;if(lang=="svg")h+=svgBlock(buf.join("\n"));else h+="</code></pre>";lang=""}
+   continue}
+  if(inCode){if(lang=="svg")buf.push(l);else h+=esc(l)+"\n";continue}
   let m;
   if(m=l.match(/^#{1,4}\s+(.*)/)){close();h+="<h3>"+inl(m[1])+"</h3>"}
   else if(m=l.match(/^\s*[-*•]\s+(.*)/)){if(list!="ul"){close();h+="<ul>";list="ul"}h+="<li>"+inl(m[1])+"</li>"}
@@ -117,7 +156,7 @@ function md(src){
   else if(!l.trim()){close()}
   else{close();h+="<p>"+inl(l)+"</p>"}
  }
- close();if(inCode)h+="</code></pre>";return h;
+ close();if(inCode){h+=lang=="svg"?svgBlock(buf.join("\n")):"</code></pre>"}return h;
 }
 function add(role,text){
  $(".hint")&&$(".hint").remove();
@@ -191,7 +230,7 @@ async function send(){
   }
   const res=await fetch("/api/ask",{method:"POST",
    headers:{"Content-Type":"application/json","x-access-code":localStorage.getItem("code")||""},
-   body:JSON.stringify({mode,level:$("#level").value,subject,history:msgs.slice(-8),text:q||"Solve the problem in the attachment.",files:parts})});
+   body:JSON.stringify({mode,level:$("#level").value,subject,history:msgs.slice(-8),text:(q||"Solve the problem in the attachment.")+diagHint(),files:parts})});
   const j=await res.json().catch(()=>({}));
   if(res.status==401){const c=prompt("Enter the access code");if(c)localStorage.setItem("code",c);throw new Error("Access code needed. Press send again.")}
   if(!res.ok)throw new Error(j.error||"Request failed ("+res.status+")");
